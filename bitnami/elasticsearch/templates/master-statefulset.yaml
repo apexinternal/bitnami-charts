@@ -3,7 +3,9 @@ kind: StatefulSet
 metadata:
   name: {{ include "elasticsearch.master.fullname" . }}
   labels: {{- include "elasticsearch.labels" . | nindent 4 }}
-    role: master
+    app.kubernetes.io/component: master
+    ## Istio Labels: https://istio.io/docs/ops/deployment/requirements/
+    app: master
 spec:
   updateStrategy:
     type: {{ .Values.master.updateStrategy.type }}
@@ -12,21 +14,34 @@ spec:
     {{- end }}
   selector:
     matchLabels: {{- include "elasticsearch.matchLabels" . | nindent 6 }}
-      role: master
-  serviceName: {{ template "elasticsearch.master.fullname" . }}
+      app.kubernetes.io/component: master
   podManagementPolicy: Parallel
   replicas: {{ .Values.master.replicas }}
+  serviceName: {{ template "elasticsearch.master.fullname" . }}
   template:
     metadata:
       labels: {{- include "elasticsearch.labels" . | nindent 8 }}
-        role: master
+        app.kubernetes.io/component: master
+        ## Istio Labels: https://istio.io/docs/ops/deployment/requirements/
+        app: master
+        {{- if .Values.master.podLabels }}
+        {{- include "elasticsearch.tplValue" (dict "value" .Values.master.podLabels "context" $) | nindent 8 }}
+        {{- end }}
       {{- with .Values.master.podAnnotations }}
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-{{- include "elasticsearch.imagePullSecrets" . | nindent 6 }}
+      {{- include "elasticsearch.imagePullSecrets" . | nindent 6 }}
+      {{- if .Values.master.hostAliases }}
+      hostAliases: {{- include "common.tplvalues.render" (dict "value" .Values.master.hostAliases "context" $) | nindent 8 }}
+      {{- end }}
       {{- if .Values.master.affinity }}
       affinity: {{- include "elasticsearch.tplValue" (dict "value" .Values.master.affinity "context" $) | nindent 8 }}
+      {{- else }}
+      affinity:
+        podAffinity: {{- include "common.affinities.pods" (dict "type" .Values.master.podAffinityPreset "component" "master" "context" $) | nindent 10 }}
+        podAntiAffinity: {{- include "common.affinities.pods" (dict "type" .Values.master.podAntiAffinityPreset "component" "master" "context" $) | nindent 10 }}
+        nodeAffinity: {{- include "common.affinities.nodes" (dict "type" .Values.master.nodeAffinityPreset.type "key" .Values.master.nodeAffinityPreset.key "values" .Values.master.nodeAffinityPreset.values) | nindent 10 }}
       {{- end }}
       {{- if .Values.master.nodeSelector }}
       nodeSelector: {{- include "elasticsearch.tplValue" (dict "value" .Values.master.nodeSelector "context" $) | nindent 8 }}
@@ -50,6 +65,9 @@ spec:
             - /scripts/sysctl.sh
           securityContext:
             privileged: true
+          {{- if .Values.sysctlImage.resources }}
+          resources: {{- toYaml .Values.sysctlImage.resources | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: initcontainer-script
               mountPath: /scripts/sysctl.sh
@@ -66,7 +84,7 @@ spec:
               chown -R {{ .Values.master.securityContext.runAsUser }}:{{ .Values.master.securityContext.fsGroup }} //bitnami/elasticsearch/data
           securityContext:
             runAsUser: 0
-          {{- if .Values.volumePermissions.resource }}
+          {{- if .Values.volumePermissions.resources }}
           resources: {{- toYaml .Values.volumePermissions.resources | nindent 12 }}
           {{- end }}
           volumeMounts:
@@ -88,7 +106,9 @@ spec:
             - name: ELASTICSEARCH_CLUSTER_NAME
               value: {{ .Values.name | quote }}
             - name: ELASTICSEARCH_CLUSTER_HOSTS
-              value: {{ template "elasticsearch.discovery.fullname" . }}
+              value: {{ include "elasticsearch.hosts" . | quote }}
+            - name: ELASTICSEARCH_TOTAL_NODES
+              value: {{ add .Values.master.replicas .Values.data.replicas | quote }}
             - name: ELASTICSEARCH_CLUSTER_MASTER_HOSTS
               {{- $elasticsearchMasterFullname := include "elasticsearch.master.fullname" . }}
               {{- $replicas := int .Values.master.replicas }}
@@ -99,13 +119,33 @@ spec:
             - name: ELASTICSEARCH_PLUGINS
               value: {{ .Values.plugins | quote }}
             {{- end }}
+            {{- if .Values.snapshotRepoPath }}
+            - name: ELASTICSEARCH_FS_SNAPSHOT_REPO_PATH
+              value: {{ .Values.snapshotRepoPath | quote }}
+            {{- end }}
             - name: ELASTICSEARCH_HEAP_SIZE
               value: {{ .Values.master.heapSize | quote }}
             - name: ELASTICSEARCH_IS_DEDICATED_NODE
               value: "yes"
             - name: ELASTICSEARCH_NODE_TYPE
               value: "master"
+            {{- if .Values.extraEnvVars }}
+            {{- include "elasticsearch.tplValue" ( dict "value" .Values.extraEnvVars "context" $ ) | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.extraEnvVarsConfigMap .Values.extraEnvVarsSecret }}
+          envFrom:
+            {{- if .Values.extraEnvVarsConfigMap }}
+            - configMapRef:
+                name: {{ include "elasticsearch.tplValue" ( dict "value" .Values.extraEnvVarsConfigMap "context" $ ) }}
+            {{- end }}
+            {{- if .Values.extraEnvVarsSecret }}
+            - secretRef:
+                name: {{ include "elasticsearch.tplValue" ( dict "value" .Values.extraEnvVarsSecret "context" $ ) }}
+            {{- end }}
+          {{- end }}
           ports:
+            - name: http
+              containerPort: 9200
             - name: transport
               containerPort: 9300
           {{- if .Values.master.livenessProbe.enabled }}
@@ -144,6 +184,18 @@ spec:
             {{- if .Values.extraVolumeMounts }}
             {{- toYaml .Values.extraVolumeMounts | nindent 12 }}
             {{- end }}
+            {{- if .Values.initScripts }}
+            - name: custom-init-scripts
+              mountPath: /docker-entrypoint-initdb.d/init-scripts
+            {{- end }}
+            {{- if .Values.initScriptsCM }}
+            - name: custom-init-scripts-cm
+              mountPath: /docker-entrypoint-initdb.d/init-scripts-cm
+            {{- end }}
+            {{- if .Values.initScriptsSecret }}
+            - name: custom-init-scripts-secret
+              mountPath: /docker-entrypoint-initdb.d/init-scripts-secret
+            {{- end }}
       volumes:
         {{- if .Values.sysctlImage.enabled }}
         - name: initcontainer-script
@@ -159,9 +211,29 @@ spec:
         {{- if .Values.extraVolumes }}
         {{- toYaml .Values.extraVolumes | nindent 8 }}
         {{- end }}
+        {{- if .Values.initScripts }}
+        - name: custom-init-scripts
+          configMap:
+            name: {{ template "elasticsearch.initScripts" . }}
+        {{- end }}
+        {{- if .Values.initScriptsCM }}
+        - name: custom-init-scripts-cm
+          configMap:
+            name: {{ template "elasticsearch.initScriptsCM" . }}
+        {{- end }}
+        {{- if .Values.initScriptsSecret }}
+        - name: custom-init-scripts-secret
+          secret:
+            secretName: {{ template "elasticsearch.initScriptsSecret" . }}
+            defaultMode: 0755
+        {{- end }}
 {{- if not .Values.master.persistence.enabled }}
         - name: "data"
           emptyDir: {}
+{{- else if .Values.master.persistence.existingClaim }}
+        - name: "data"
+          persistentVolumeClaim:
+            claimName: {{ .Values.master.persistence.existingClaim }}
 {{- else }}
   volumeClaimTemplates:
     - metadata:
@@ -176,4 +248,11 @@ spec:
         resources:
           requests:
             storage: {{ .Values.master.persistence.size | quote }}
+        {{- if .Values.master.persistence.selector }}
+        selector: {{- include "common.tplvalues.render" (dict "value" .Values.master.persistence.selector "context" $) | nindent 10 }}
+        {{- else if .Values.master.persistence.existingVolume }}
+        selector:
+          matchLabels:
+            volume: {{ .Values.master.persistence.existingVolume }}
+        {{- end }}
 {{- end }}

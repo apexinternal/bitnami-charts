@@ -1,13 +1,9 @@
-{{- if .Values.useHelm3 -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "kubeapps.kubeops.fullname" . }}
-  labels:
+  labels:{{ include "kubeapps.extraAppLabels" . | nindent 4 }}
     app: {{ template "kubeapps.kubeops.fullname" . }}
-    chart: {{ template "kubeapps.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
 spec:
   replicas: {{ .Values.kubeops.replicaCount }}
   selector:
@@ -18,7 +14,9 @@ spec:
     metadata:
       labels:
         app: {{ template "kubeapps.kubeops.fullname" . }}
+        app.kubernetes.io/name: {{ template "kubeapps.name" . }}
         release: {{ .Release.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
 {{- include "kubeapps.imagePullSecrets" . | indent 6 }}
       serviceAccountName: {{ template "kubeapps.kubeops.fullname" . }}
@@ -42,11 +40,25 @@ spec:
       containers:
         - name: kubeops
           image: {{ template "kubeapps.image" (list .Values.kubeops.image .Values.global) }}
+          imagePullPolicy: {{ .Values.kubeops.image.pullPolicy | quote }}
           command:
             - /kubeops
           args:
             - --user-agent-comment=kubeapps/{{ .Chart.AppVersion }}
             - --assetsvc-url=http://{{ template "kubeapps.assetsvc.fullname" . }}:{{ .Values.assetsvc.service.port }}
+            {{- if .Values.clusters }}
+            - --clusters-config-path=/config/clusters.conf
+            {{- end }}
+            {{- if .Values.pinnipedProxy.enabled }}
+            - --pinniped-proxy-url=http://kubeapps-internal-pinniped-proxy.{{ .Release.Namespace }}:{{ .Values.pinnipedProxy.service.port }}
+            {{- end }}
+          {{- if .Values.clusters }}
+          volumeMounts:
+            - name: kubeops-config
+              mountPath: /config
+            - name: ca-certs
+              mountPath: /etc/additional-clusters-cafiles
+          {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -64,4 +76,11 @@ spec:
           {{- if .Values.kubeops.resources }}
           resources: {{- toYaml .Values.kubeops.resources | nindent 12 }}
           {{- end }}
-{{- end }}{{/* matches useHelm3 */}}
+      {{- if .Values.clusters }}
+      volumes:
+        - name: kubeops-config
+          configMap:
+            name: {{ template "kubeapps.kubeops-config.fullname" . }}
+        - name: ca-certs
+          emptyDir: {}
+      {{- end }}

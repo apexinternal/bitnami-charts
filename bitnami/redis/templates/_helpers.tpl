@@ -65,7 +65,7 @@ Return the appropriate apiVersion for PodSecurityPolicy.
 {{- end -}}
 
 {{/*
-Return the proper Redis image name
+Return the proper Redis(TM) image name
 */}}
 {{- define "redis.image" -}}
 {{- $registryName := .Values.image.registry -}}
@@ -88,7 +88,7 @@ Also, we can't use a single if because lazy evaluation is not an option
 {{- end -}}
 
 {{/*
-Return the proper Redis Sentinel image name
+Return the proper Redis(TM) Sentinel image name
 */}}
 {{- define "sentinel.image" -}}
 {{- $registryName := .Values.sentinel.image.registry -}}
@@ -157,6 +157,36 @@ Also, we can't use a single if because lazy evaluation is not an option
 {{- end -}}
 
 {{/*
+Return the path to the cert file.
+*/}}
+{{- define "redis.tlsCert" -}}
+{{- required "Certificate filename is required when TLS in enabled" .Values.tls.certFilename | printf "/opt/bitnami/redis/certs/%s" -}}
+{{- end -}}
+
+{{/*
+Return the path to the cert key file.
+*/}}
+{{- define "redis.tlsCertKey" -}}
+{{- required "Certificate Key filename is required when TLS in enabled" .Values.tls.certKeyFilename | printf "/opt/bitnami/redis/certs/%s" -}}
+{{- end -}}
+
+{{/*
+Return the path to the CA cert file.
+*/}}
+{{- define "redis.tlsCACert" -}}
+{{- required "Certificate CA filename is required when TLS in enabled" .Values.tls.certCAFilename | printf "/opt/bitnami/redis/certs/%s" -}}
+{{- end -}}
+
+{{/*
+Return the path to the DH params file.
+*/}}
+{{- define "redis.tlsDHParams" -}}
+{{- if .Values.tls.dhParamsFilename -}}
+{{- printf "/opt/bitnami/redis/certs/%s" .Values.tls.dhParamsFilename -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "redis.serviceAccountName" -}}
@@ -179,7 +209,7 @@ Get the password secret.
 {{- end -}}
 
 {{/*
-Get the password key to be retrieved from Redis secret.
+Get the password key to be retrieved from Redis(TM) secret.
 */}}
 {{- define "redis.secretPasswordKey" -}}
 {{- if and .Values.existingSecret .Values.existingSecretPasswordKey -}}
@@ -190,7 +220,7 @@ Get the password key to be retrieved from Redis secret.
 {{- end -}}
 
 {{/*
-Return Redis password
+Return Redis(TM) password
 */}}
 {{- define "redis.password" -}}
 {{- if not (empty .Values.global.redis.password) }}
@@ -352,4 +382,40 @@ but Helm 2.9 and 2.10 does not support it, so we need to implement this if-else 
         {{- end -}}
     {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Compile all warnings into a single message, and call fail.
+*/}}
+{{- define "redis.validateValues" -}}
+{{- $messages := list -}}
+{{- $messages := append $messages (include "redis.validateValues.spreadConstraints" .) -}}
+{{- $messages := without $messages "" -}}
+{{- $message := join "\n" $messages -}}
+
+{{- if $message -}}
+{{-   printf "\nVALUES VALIDATION:\n%s" $message | fail -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Validate values of Redis(TM) - spreadConstrainsts K8s version */}}
+{{- define "redis.validateValues.spreadConstraints" -}}
+{{- if and (semverCompare "<1.16-0" .Capabilities.KubeVersion.GitVersion) .Values.slave.spreadConstraints -}}
+redis: spreadConstraints
+    Pod Topology Spread Constraints are only available on K8s  >= 1.16
+    Find more information at https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
+{{- end -}}
+{{- end -}}
+
+{{/*
+Renders a value that contains template.
+Usage:
+{{ include "redis.tplValue" (dict "value" .Values.path.to.the.Value "context" $) }}
+*/}}
+{{- define "redis.tplValue" -}}
+    {{- if typeIs "string" .value }}
+        {{- tpl .value .context }}
+    {{- else }}
+        {{- tpl (.value | toYaml) .context }}
+    {{- end }}
 {{- end -}}

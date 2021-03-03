@@ -32,21 +32,25 @@ Create chart name and version as used by the chart label.
 {{- end -}}
 
 {{/*
+Common labels for additional kubeapps applications. Used on resources whose app name is different
+from kubeapps
+*/}}
+{{- define "kubeapps.extraAppLabels" -}}
+chart: {{ include "kubeapps.chart" . }}
+release: {{ .Release.Name }}
+heritage: {{ .Release.Service }}
+helm.sh/chart: {{ template "kubeapps.chart" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/name: {{ include "kubeapps.name" . }}
+{{- end -}}
+
+{{/*
 Common labels
 */}}
 {{- define "kubeapps.labels" -}}
 app: {{ include "kubeapps.name" . }}
-chart: {{ include "kubeapps.chart" . }}
-release: {{ .Release.Name }}
-heritage: {{ .Release.Service }}
-{{- end -}}
-
-{{/*
-Labels to use on deploy.spec.selector.matchLabels and svc.spec.selector
-*/}}
-{{- define "kubeapps.matchLabels" -}}
-app: {{ include "kubeapps.name" . }}
-release: {{ .Release.Name }}
+{{ template "kubeapps.extraAppLabels" . }}
 {{- end -}}
 
 {{/*
@@ -72,16 +76,6 @@ Also, we can't use a single if because lazy evaluation is not an option
 {{- end -}}
 
 {{/*
-Create a default fully qualified app name for MongoDB dependency.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-*/}}
-{{- define "kubeapps.mongodb.fullname" -}}
-{{- $name := default "mongodb" .Values.mongodb.nameOverride -}}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-
-{{/*
 Create a default fully qualified app name for PostgreSQL dependency.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 */}}
@@ -100,8 +94,8 @@ Create name for the apprepository-controller based on the fullname
 {{/*
 Create name for the apprepository pre-upgrade job
 */}}
-{{- define "kubeapps.apprepository-jobs-preupgrade.fullname" -}}
-{{ template "kubeapps.fullname" . }}-internal-apprepository-jobs-preupgrade
+{{- define "kubeapps.apprepository-job-postupgrade.fullname" -}}
+{{ template "kubeapps.fullname" . }}-internal-apprepository-job-postupgrade
 {{- end -}}
 
 {{/*
@@ -154,21 +148,10 @@ Create name for the frontend config based on the fullname
 {{- end -}}
 
 {{/*
-Create proxy_pass for the frontend config based on the useHelm3 flag
+Create proxy_pass for the frontend config
 */}}
 {{- define "kubeapps.frontend-config.proxy_pass" -}}
-{{- if .Values.useHelm3 -}}
 http://{{ template "kubeapps.kubeops.fullname" . }}:{{ .Values.kubeops.service.port }}
-{{- else -}}
-http://{{ template "kubeapps.tiller-proxy.fullname" . }}:{{ .Values.tillerProxy.service.port }}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Create name for the tiller-proxy based on the fullname
-*/}}
-{{- define "kubeapps.tiller-proxy.fullname" -}}
-{{ template "kubeapps.fullname" . }}-internal-tiller-proxy
 {{- end -}}
 
 {{/*
@@ -179,10 +162,32 @@ Create name for kubeops based on the fullname
 {{- end -}}
 
 {{/*
+Create name for the kubeops config based on the fullname
+*/}}
+{{- define "kubeapps.kubeops-config.fullname" -}}
+{{ template "kubeapps.fullname" . }}-kubeops-config
+{{- end -}}
+
+{{/*
 Create name for the secrets related to an app repository
 */}}
 {{- define "kubeapps.apprepository-secret.name" -}}
 apprepo-{{ .name }}-secrets
+{{- end -}}
+
+{{/*
+Create name for the secrets related to oauth2_proxy
+*/}}
+{{- define "kubeapps.oauth2_proxy-secret.name" -}}
+{{ template "kubeapps.fullname" . }}-oauth2
+{{- end -}}
+
+{{/*
+Create name for pinniped-proxy based on the fullname.
+Currently used for a service name only.
+*/}}
+{{- define "kubeapps.pinniped-proxy.fullname" -}}
+{{ template "kubeapps.fullname" . }}-internal-pinniped-proxy
 {{- end -}}
 
 {{/*
@@ -235,4 +240,36 @@ Usage:
     {{- else }}
         {{- tpl (.value | toYaml) .context }}
     {{- end }}
+{{- end -}}
+
+{{/*
+Returns the kubeappsCluster based on the configured clusters by finding the cluster without
+a defined apiServiceURL.
+*/}}
+{{- define "kubeapps.kubeappsCluster" -}}
+    {{- $kubeappsCluster := "" }}
+    {{- if eq (len .Values.clusters) 0 }}
+        {{- fail "At least one cluster must be defined." }}
+    {{- end }}
+    {{- range .Values.clusters }}
+        {{- if eq (.apiServiceURL | toString) "<nil>" }}
+            {{- if eq $kubeappsCluster "" }}
+                {{- $kubeappsCluster = .name }}
+            {{- else }}
+                {{- fail "Only one cluster can be specified without an apiServiceURL to refer to the cluster on which Kubeapps is installed." }}
+            {{- end }}
+        {{- end }}
+    {{- end }}
+    {{- $kubeappsCluster }}
+{{- end -}}
+
+{{/*
+Returns a JSON list of cluster names only (without sensitive tokens etc.)
+*/}}
+{{- define "kubeapps.clusterNames" -}}
+    {{- $sanitizedClusters := list }}
+    {{- range .Values.clusters }}
+    {{- $sanitizedClusters = append $sanitizedClusters .name }}
+    {{- end }}
+    {{- $sanitizedClusters | toJson }}
 {{- end -}}
